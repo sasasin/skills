@@ -51,6 +51,23 @@ npx skills update quick-research
 npx skills remove --global quick-research
 ```
 
+## Portability（Web検索・URL取得のツール名）
+
+スキル本文はツール名を固定していません。`web_search` や `fetch_url` はその環境に存在しないことがあり、
+SKILL.md 側で「能力 → よくあるツール名」の対応表を持ちます。
+
+| 環境 | 検索 | URL取得 |
+|---|---|---|
+| Pi | `web_search`（拡張により `web_research` / `fetch_url`） | `web_fetch` |
+| Claude Code | `WebSearch` | `WebFetch` |
+| Codex CLI | `web_search`（cached / live） | —（shell の `curl` で代替） |
+| Gemini CLI | `google_web_search` | `web_fetch` |
+| OpenCode | `websearch` | `webfetch` |
+| Cline | —（MCPで追加するのが確実） | `fetch_web_content` / `fetch_web` |
+| MCP 系 | `brave_web_search`・Tavily `web_search`・Exa `web_search_exa` | `fetch` |
+
+検索も取得も見つからない環境では、推測で「最新」を書かず、Webアクセスが無いことを伝えて止まります。
+
 ## Layout
 
 ```
@@ -59,7 +76,7 @@ npx skills remove --global quick-research
 ├── README.md
 └── skills/
     └── quick-research/
-        └── SKILL.md                 # name / description の frontmatter
+        └── SKILL.md                 # name / description / compatibility の frontmatter
 ```
 
 スキルの追加は `skills/<name>/SKILL.md` が基本。カテゴリで纏める場合は
