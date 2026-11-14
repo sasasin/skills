@@ -1,0 +1,761 @@
+{
+  "id": "65fecf28-eda9-42f4-a29e-769382cf9be0",
+  "revision": 0,
+  "last_node_id": 21,
+  "last_link_id": 26,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UnetLoaderGGUFDynamicVRAM",
+      "pos": [
+        -283.78147711392427,
+        -103.89652006330608
+      ],
+      "size": [
+        346.50417175292966,
+        58
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            10
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UnetLoaderGGUFDynamicVRAM"
+      },
+      "widgets_values": [
+        "diffusion_models\\moss_image_sft_Q8_CR.gguf"
+      ],
+      "widgets_values_named": {
+        "unet_name": "diffusion_models\\moss_image_sft_turbo_Q8_CR.gguf"
+      }
+    },
+    {
+      "id": 2,
+      "type": "CLIPLoader",
+      "pos": [
+        -281.47759668170016,
+        -0.048204570065741636
+      ],
+      "size": [
+        345.64593492660106,
+        106.78796659046509
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            12
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen3.5_9b_int8_convrot.safetensors",
+        "moss_image",
+        "default"
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen3.5_9b_int8_convrot.safetensors",
+        "type": "moss_image",
+        "device": "default"
+      }
+    },
+    {
+      "id": 9,
+      "type": "TemporalScoreRescaling",
+      "pos": [
+        555.1431757274343,
+        -74.76391622882744
+      ],
+      "size": [
+        320,
+        90
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 5,
+      "mode": 0,
+      "showAdvanced": true,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "patched_model",
+          "type": "MODEL",
+          "links": [
+            19
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TemporalScoreRescaling",
+        "cnr_id": "comfy-core",
+        "ver": "0.41.0",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        }
+      },
+      "widgets_values": [
+        0.95,
+        1
+      ],
+      "widgets_values_named": {
+        "tsr_k": 0.95,
+        "tsr_sigma": 1
+      }
+    },
+    {
+      "id": 10,
+      "type": "KSamplerAdvanced",
+      "pos": [
+        847.3997021917503,
+        -85.65068396301601
+      ],
+      "size": [
+        312.875,
+        546
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 20
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 14
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 25
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 18
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            21
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSamplerAdvanced"
+      },
+      "widgets_values": [
+        "enable",
+        177948116261234,
+        "randomize",
+        50,
+        3,
+        "euler",
+        "sgm_uniform",
+        0,
+        10000,
+        "disable"
+      ],
+      "widgets_values_named": {
+        "add_noise": "enable",
+        "noise_seed": 177948116261234,
+        "control_after_generate": "randomize",
+        "steps": 8,
+        "cfg": 1,
+        "sampler_name": "er_sde",
+        "scheduler": "simple",
+        "start_at_step": 0,
+        "end_at_step": 10000,
+        "return_with_leftover_noise": "disable"
+      }
+    },
+    {
+      "id": 11,
+      "type": "CLIPTextEncode",
+      "pos": [
+        117.03753178901324,
+        -90.89833497102944
+      ],
+      "size": [
+        379.64622184964696,
+        279.5557646394247
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            14,
+            24
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        "A candid, low-angle DSLR photograph captured with a Nikon D850 and an ultra-wide 14mm f/1.8 lens, shot from a true worm's-eye view at ground level, pointing sharply upward.\n\nThe optical focus is razor-sharp on the weathered, cracked human skull resting in the immediate foreground, creating an extremely shallow depth of field. Every micro-crack, bone texture, and speck of dirt on the skull is crisp, while the demon woman's towering figure directly behind it falls into a soft, creamy background bokeh beneath a vast, vibrant blue sky.\n\nThe demon woman stands turned in profile, her left leg lifted so that her left boot rests firmly on top of the skull with her left knee bent at a sharp angle. Her right leg remains straight to anchor her weight, creating a dynamic, dominant stance. The dramatic wide-angle forced perspective makes the skull appear massive in the foreground while exaggerating her monumental height overhead. The wind blows her cloak slightly to the side, revealing her athletic body. Natural, harsh midday sun casts crisp shadows across the gritty ground, featuring subtle chromatic aberration, fine sensor noise, and a flat, desaturated color grade. RAW photo, un-retouched."
+      ],
+      "widgets_values_named": {
+        "text": "A candid, low-angle DSLR photograph captured with a Nikon D850 and an ultra-wide 14mm f/1.8 lens, shot from a true worm's-eye view at ground level, pointing sharply upward.\n\nThe optical focus is razor-sharp on the weathered, cracked human skull resting in the immediate foreground, creating an extremely shallow depth of field. Every micro-crack, bone texture, and speck of dirt on the skull is crisp, while the demon woman's towering figure directly behind it falls into a soft, creamy background bokeh beneath a vast, vibrant blue sky.\n\nThe demon woman stands turned in profile, her left leg lifted so that her left boot rests firmly on top of the skull with her left knee bent at a sharp angle. Her right leg remains straight to anchor her weight, creating a dynamic, dominant stance. The dramatic wide-angle forced perspective makes the skull appear massive in the foreground while exaggerating her monumental height overhead. The wind blows her cloak slightly to the side, revealing her athletic body. Natural, harsh midday sun casts crisp shadows across the gritty ground, featuring subtle chromatic aberration, fine sensor noise, and a flat, desaturated color grade. RAW photo, un-retouched."
+      }
+    },
+    {
+      "id": 13,
+      "type": "ResolutionSelector",
+      "pos": [
+        124.0325306644448,
+        228.73943967313713
+      ],
+      "size": [
+        368.9148404327133,
+        150
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "links": [
+            16
+          ]
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": [
+            17
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ResolutionSelector"
+      },
+      "widgets_values": [
+        "2:3 (Portrait Photo)",
+        1,
+        16
+      ],
+      "widgets_values_named": {
+        "aspect_ratio": "2:3 (Portrait Photo)",
+        "megapixels": 1,
+        "multiple": 8
+      }
+    },
+    {
+      "id": 14,
+      "type": "EmptyFlux2LatentImage",
+      "pos": [
+        555.1431757274343,
+        20.88937775657244
+      ],
+      "size": [
+        300,
+        106
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "width",
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 16
+        },
+        {
+          "localized_name": "height",
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 17
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "LATENT",
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            18
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptyFlux2LatentImage"
+      },
+      "widgets_values": [
+        1024,
+        1024,
+        1
+      ],
+      "widgets_values_named": {
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    {
+      "id": 15,
+      "type": "SkipLayerGuidanceDiTSimple",
+      "pos": [
+        555.1431757274343,
+        -27.800389027038275
+      ],
+      "size": [
+        236.23332824707032,
+        130
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 8,
+      "mode": 0,
+      "showAdvanced": true,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 19
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "slot_index": 0,
+          "links": [
+            20
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SkipLayerGuidanceDiTSimple",
+        "cnr_id": "comfy-core",
+        "ver": "0.41.0",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        }
+      },
+      "widgets_values": [
+        "",
+        "22",
+        0,
+        1
+      ],
+      "widgets_values_named": {
+        "double_layers": "",
+        "single_layers": "22, 24",
+        "start_percent": 0.1,
+        "end_percent": 0.7
+      }
+    },
+    {
+      "id": 16,
+      "type": "VAEDecode",
+      "pos": [
+        1026.102178719151,
+        509.70235967723863
+      ],
+      "size": [
+        140,
+        46
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 21
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            26
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      }
+    },
+    {
+      "id": 17,
+      "type": "VAELoader",
+      "pos": [
+        -280.01001859060665,
+        151.65054184196325
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            22
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "flux2-vae.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "flux2-vae.safetensors"
+      }
+    },
+    {
+      "id": 19,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        555.1431757274343,
+        67.91250483028587
+      ],
+      "size": [
+        204.6041717529297,
+        26
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 24
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            25
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ConditioningZeroOut"
+      }
+    },
+    {
+      "id": 20,
+      "type": "SaveImage",
+      "pos": [
+        1215.0882720120508,
+        -76.22364401842536
+      ],
+      "size": [
+        430.353647962148,
+        308.4983815722003
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 26
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "Moss SFT"
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "Moss Turbo"
+      }
+    },
+    {
+      "id": 21,
+      "type": "MarkdownNote",
+      "pos": [
+        -795.8800042002335,
+        -130.19283460480432
+      ],
+      "size": [
+        470,
+        660
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## Custom Nodes\n\n- [GGUF Loader](https://registry.comfy.org/publishers/molbal/nodes/comfyui-gguf-reboot)\n- [Information page](https://molbal.github.io/gguf/models/moss-image)\n\n## Model Links\n\n- [Hugging Face:molbal/MOSS-Image-GGUF](https://huggingface.co/molbal/MOSS-Image-GGUF)\n\n**text_encoder**\n\n- [qwen3.5_9b_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/text_encoders/qwen3.5_9b_int8_convrot.safetensors)\n\n**diffusion_models**\n\n- [moss_image_sft_Q8_CR.gguf](https://huggingface.co/molbal/MOSS-Image-GGUF/blob/main/moss_image_sft_Q8_CR.gguf)\n\n**vae**\n\n- [flux2-vae.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/vae/flux2-vae.safetensors)\n\n\n## Model Storage Location\n\n```\nComfyUI/\n  models/\n    text_encoders/\n      qwen3.5_9b_int8_convrot.safetensors\n    diffusion_models/\n      moss_image_sft_Q8_CR.gguf\n    vae/\n      flux2-vae.safetensors\n```\n\n## Sampling settings\n\nThe base and SFT builds run 50 steps at CFG 3 with the euler sampler and the sgm_uniform scheduler. Skip layer guidance skips the negative branch at layer 22 across the full sampling range, which is the upstream setting.\n"
+      ],
+      "widgets_values_named": {
+        "text": "## Custom Nodes\n\n- [GGUF Loader](https://registry.comfy.org/publishers/molbal/nodes/comfyui-gguf-reboot)\n- [Information page](https://molbal.github.io/gguf/models/moss-image)\n\n## Model Links\n\n- [Hugging Face:molbal/MOSS-Image-GGUF](https://huggingface.co/molbal/MOSS-Image-GGUF)\n\n**text_encoder**\n\n- [qwen3.5_9b_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MOSS-Image/resolve/main/text_encoders/qwen3.5_9b_int8_convrot.safetensors)\n\n**diffusion_models**\n\n- [moss_image_sft_turbo_*.gguf](https://huggingface.co/molbal/MOSS-Image-GGUF)\n\n**vae**\n\n- [flux2-vae.safetensors](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/vae/flux2-vae.safetensors)\n\n\n## Model Storage Location\n\n```\n📂 ComfyUI/\n├── 📂 models/\n│   ├── 📂 text_encoders/\n│   │   └── qwen3.5_9b_int8_convrot.safetensors\n│   ├── 📂 diffusion_models/\n│   │   └── moss_image_sft_turbo_*.gguf\n│   └── 📂 vae/\n│       └── flux2-vae.safetensors\n```\n"
+      },
+      "color": "#222",
+      "bgcolor": "#000"
+    }
+  ],
+  "links": [
+    [
+      10,
+      1,
+      0,
+      9,
+      0,
+      "MODEL"
+    ],
+    [
+      12,
+      2,
+      0,
+      11,
+      0,
+      "CLIP"
+    ],
+    [
+      14,
+      11,
+      0,
+      10,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      16,
+      13,
+      0,
+      14,
+      0,
+      "INT"
+    ],
+    [
+      17,
+      13,
+      1,
+      14,
+      1,
+      "INT"
+    ],
+    [
+      18,
+      14,
+      0,
+      10,
+      3,
+      "LATENT"
+    ],
+    [
+      19,
+      9,
+      0,
+      15,
+      0,
+      "MODEL"
+    ],
+    [
+      20,
+      15,
+      0,
+      10,
+      0,
+      "MODEL"
+    ],
+    [
+      21,
+      10,
+      0,
+      16,
+      0,
+      "LATENT"
+    ],
+    [
+      22,
+      17,
+      0,
+      16,
+      1,
+      "VAE"
+    ],
+    [
+      24,
+      11,
+      0,
+      19,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      25,
+      19,
+      0,
+      10,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      26,
+      16,
+      0,
+      20,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "Load models",
+      "bounding": [
+        -303.38443877002646,
+        -166.4546722470092,
+        393.44328574964857,
+        395.5809067138192
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "Prompt and size",
+      "bounding": [
+        103.93510361641394,
+        -163.02977811331672,
+        414.4820277953215,
+        568.7834489973021
+      ],
+      "color": "#b58b2a",
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "Model settings & conditioning",
+      "bounding": [
+        532.5379646846471,
+        -158.13712086846803,
+        290.206636552795,
+        250.75620666195613
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "Sampling",
+      "bounding": [
+        831.2388280519368,
+        -158.0147765575887,
+        351.4775027947495,
+        689.8470823505818
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 5,
+      "title": "Save Image",
+      "bounding": [
+        1194.6214935782473,
+        -153.61744085080957,
+        471.10871943762413,
+        412.8421963392997
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.6934334949441332,
+      "offset": [
+        347.2018396929378,
+        699.2603240922156
+      ]
+    },
+    "frontendVersion": "1.55.17"
+  },
+  "version": 0.4
+}
