@@ -9,6 +9,7 @@ Personal agent skills pack. / 私専用の Agent Skills をまとめたリポジ
 | Skill | 何をするか |
 |---|---|
 | [quick-research](skills/quick-research/SKILL.md) | 5分程度のライトな調査レポートを「結論→根拠→出典」で返す。検索10回・本文取得4件の予算管理つき |
+| [comfyui-moss-image](skills/comfyui-moss-image/SKILL.md) | ローカル ComfyUI の MOSS-Image GGUF ワークフローで画像を生成し、完了を待って画像を取り出す。接続先・モデル名・出力先は引数か環境変数で差し替える（要 ComfyUI と Python 3） |
 
 ## Install
 
@@ -75,8 +76,12 @@ SKILL.md 側で「能力 → よくあるツール名」の対応表を持ちま
 ├── LICENSE                          # MIT（リポジトリ全体のスキルに適用）
 ├── README.md
 └── skills/
+    ├── comfyui-moss-image/
+    │   ├── SKILL.md                 # name / description / compatibility の frontmatter
+    │   ├── comfy_run.py             # 実行スクリプト（Python 標準ライブラリのみ）
+    │   └── moss_image_sft.workflow.json   # 基準グラフ（スクリプトと同じフォルダに置く）
     └── quick-research/
-        └── SKILL.md                 # name / description / compatibility の frontmatter
+        └── SKILL.md
 ```
 
 スキルの追加は `skills/<name>/SKILL.md` が基本。カテゴリで纏める場合は
