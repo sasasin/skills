@@ -9,7 +9,7 @@ Personal agent skills pack. / 私専用の Agent Skills をまとめたリポジ
 | Skill | 何をするか |
 |---|---|
 | [quick-research](skills/quick-research/SKILL.md) | 5分程度のライトな調査レポートを「結論→根拠→出典」で返す。検索10回・本文取得4件の予算管理つき |
-| [comfyui-moss-image](skills/comfyui-moss-image/SKILL.md) | ローカル ComfyUI の MOSS-Image GGUF ワークフローで画像を生成し、完了を待って画像を取り出す。接続先・モデル名・出力先は引数か環境変数で差し替える（要 ComfyUI と Python 3） |
+| [comfyui-moss-image](skills/comfyui-moss-image/SKILL.md) | ローカル ComfyUI の MOSS-Image GGUF ワークフローで画像を生成し、完了を待って画像を取り出す。接続先・モデル名・出力先・推論エンジンは初回に 1 回だけ調べて `env.json` に保存し、以降は読みにいくだけ（要 ComfyUI と Python 3） |
 
 ## Install
 
@@ -69,6 +69,20 @@ SKILL.md 側で「能力 → よくあるツール名」の対応表を持ちま
 
 検索も取得も見つからない環境では、推測で「最新」を書かず、Webアクセスが無いことを伝えて止まります。
 
+## 状態ファイル（環境検出の結果）を置く場所
+
+スキル本体は `npx skills update` で再生成される配布物で、`~/.agents/.skill-lock.json` はスキルフォルダ全体のハッシュを持つ。
+したがって機械別の値（ComfyUI の URL、モデル名、GPU、unload API の有無）はスキルフォルダに書かず、CLI ツールと同じ流儀で XDG に置く。
+
+| 置き場所 | 内容 |
+|---|---|
+| `${XDG_STATE_HOME:-~/.local/state}/comfyui-moss-image/env.json` | 自動検出した環境の値（schema・TTL・fingerprint 付き） |
+| `${XDG_STATE_HOME:-~/.local/state}/comfyui-moss-image/nodes.json` | `object_info` の写し。fingerprint が同じ間だけ再利用 |
+| `COMFY_STATE_DIR` / `COMFY_ENV_FILE` / `--env-file` | 上の場所を変える手段 |
+
+検出が走る条件は「env.json が無い」「TTL（既定 1 日）切れ」「同梱グラフの内容が変わった」で、`--setup` / `--refresh-env` で明示実行、`--no-auto-setup`・`--no-env` で抑止できる。
+`npx skills add` にはインストール時に走る仕組みがない（spec にも lifecycle hook は無い）ので、「初回だけ調べる」はスクリプト自身が持つ。
+
 ## Layout
 
 ```
@@ -77,8 +91,8 @@ SKILL.md 側で「能力 → よくあるツール名」の対応表を持ちま
 ├── README.md
 └── skills/
     ├── comfyui-moss-image/
-    │   ├── SKILL.md                 # name / description / compatibility の frontmatter
-    │   ├── comfy_run.py             # 実行スクリプト（Python 標準ライブラリのみ）
+    │   ├── SKILL.md                 # name / description / compatibility / metadata の frontmatter
+    │   ├── comfy_run.py             # 実行スクリプト（Python 標準ライブラリのみ。環境検出は ~/.local/state に保存）
     │   └── moss_image_sft.workflow.json   # 基準グラフ（スクリプトと同じフォルダに置く）
     └── quick-research/
         └── SKILL.md

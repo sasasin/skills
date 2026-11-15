@@ -1,17 +1,32 @@
 #!/usr/bin/env python3
 """ComfyUI の UI(graph) form ワークフローを API form に変換して実行し、出力画像を取り出す。
 
-Python 標準ライブラリだけで動く。接続先・モデル名・出力先などの環境差は、
-すべて「CLI 引数 > 環境変数 > このファイルの既定値」の順で解決する。
-既定値は作者のローカル環境向けなので、他の環境では引数か環境変数で上書きするか、
---workflow でその環境のワークフローを渡す。
+Python 標準ライブラリだけで動く。接続先・モデル名・出力先などの環境差は
+「CLI 引数 > 環境変数 > env.json（この機械の検出結果）> このファイルの既定値」の順で解決する。
+
+env.json は「その機械で 1 回だけ調べた結果」を書き置くファイルで、置き場は
+    ${XDG_STATE_HOME:-~/.local/state}/comfyui-moss-image/env.json
+    （COMFY_STATE_DIR / COMFY_ENV_FILE / --env-file で変更できる）
+スキルフォルダは npx skills の update で再生成される配布物なので、機械別の値をそこへは書かない。
+env.json が無い・TTL 切れ、のどちらかなら実行時に自動で検出して書き、以降はファイルを読むだけになる。
 
 使い方:
     python3 comfy_run.py                 # 変換して送信し、完了を待って画像を取り出す
+    python3 comfy_run.py --setup         # 環境を調べて env.json に保存するだけ（生成はしない）
+    python3 comfy_run.py --print-env     # 解決済みの設定と env.json の鮮度を表示するだけ（送信しない）
     python3 comfy_run.py --dry-run       # 変換結果を表示するだけ（送信しない）
     python3 comfy_run.py --follow PID    # 送信済みジョブの追従だけ行う
     python3 comfy_run.py --debug [PATH]  # 変換後の API form JSON を保存して中身を確かめる（既定では書かない）
     python3 comfy_run.py --keep-models   # 生成後に ComfyUI のモデルを降ろさない
+
+環境検出（env.json / nodes.json）:
+    --setup                             推論エンジンを unload する可能性があるため、生成を送る前に行う
+    --refresh-env                       実行前に強制再検出
+    --no-auto-setup                     失効していても自動検出せず、既定値で進む
+    --no-env                            env.json / nodes.json を一切使わない
+    --keep-models / --no-keep-models    検出結果に保存され、以降の実行で引き継がれる
+    --env-file PATH                     env.json の場所（既定は上のパス）
+    --env-ttl N / COMFY_ENV_TTL         再検出までの秒数（既定 86400。0 にすると毎回検出）
 
 接続先・ファイル・環境差:
     --comfy-url URL     / COMFY_URL          ComfyUI の API base（既定 http://127.0.0.1:8188）
@@ -20,12 +35,13 @@ Python 標準ライブラリだけで動く。接続先・モデル名・出力�
     --unet NAME         / MOSS_UNET          ┐ この ComfyUI に実在するモデルファイル名。
     --clip NAME         / MOSS_CLIP          ├ 同梱グラフは作者のモデル名に patch されているので、
     --vae NAME          / MOSS_VAE           ┘ 他の環境では必ず自環境の名前を渡す
+                                         （env.json の models[*].candidates に実在する名前が並ぶ）
     --seed N            / SEED               再現用 seed
     --timeout N         / WAIT_TIMEOUT       完了待ちの上限秒数
     --unload-engine URL                     GPU を共有している推論エンジンの base URL（複数指定可）
     --no-unload-engine                      エンジン解放を一切しない
     UNLOAD_ENGINE_URL   旧 STRATA_URL        カンマ区切りで複数
-    UNLOAD_ENGINE_API_KEY / 旧 STRATA_API_KEY  Bearer トークン
+    UNLOAD_ENGINE_API_KEY / 旧 STRATA_API_KEY  Bearer トークン（トークンは env.json に書かない）
 
 既定では生成後に ComfyUI へ /free を要求してモデルを降ろす。同じ GPU を使う推論
 エンジンがある環境では、これをしないと ComfyUI がモデルを保持したままになって
@@ -39,7 +55,9 @@ Python 標準ライブラリだけで動く。接続先・モデル名・出力�
     python3 comfy_run.py --steps 30 --cfg 2.5 --sampler euler --scheduler simple
     python3 comfy_run.py --prefix IMG               # SaveImage の filename_prefix
 """
+import difflib
 import errno
+import hashlib
 import json
 import os
 import re
@@ -59,6 +77,13 @@ SEED_DEFAULT = "20261114"
 WAIT_DEFAULT = "1500"
 ENGINE_DEFAULT = "http://127.0.0.1:8080"    # 対象が無い環境では応答を見て skip する
 
+# 環境検出結果の置き場。スキルフォルダ（配布物）ではなく XDG の state を使う。
+SKILL_ID = "comfyui-moss-image"
+ENV_NAME = "env.json"
+NODES_NAME = "nodes.json"
+ENV_SCHEMA = 1
+TTL_DEFAULT = "86400"                        # 1 日たったら再検出
+
 # 実行時に configure() で埋める。既定値に頼ったまま動かない環境を減らすため、
 # ここでは解決しない。
 BASE = None
@@ -69,6 +94,15 @@ WAIT_TIMEOUT = None
 SEED = None
 MODELS = {}
 ENGINES = []
+
+# env.json（この機械の検出結果）と、その読み込み状態
+ENV = None
+ENV_PATH = None
+ENV_NOTE = ""
+ENV_REASON = ""
+NODE_CACHE = {}     # class_type -> object_info（このプロセス内）
+NODE_DISK = {}      # nodes.json から読んだ分（fingerprint が一致したときだけ使う）
+NODE_DIRTY = False
 
 # ComfyUI の UI widget でしか使われない sentinel 値。object_info の選択肢に
 # 存在せず、widgets_values の個数だけがノード数より多い場合に捨てる。
@@ -137,13 +171,20 @@ def api(path, data=None, *, base=None, headers=None):
         raise ComfyError(f"JSON でない応答 {path}: {raw[:400]}")
 
 
-def node_spec(class_type, cache={}):
-    if class_type not in cache:
+def node_spec(class_type):
+    """object_info のノード定義を取ってくる（nodes.json にキャッシュ済みなら HTTP を省く）。"""
+    global NODE_DIRTY
+    if class_type not in NODE_CACHE:
+        if class_type in NODE_DISK:
+            NODE_CACHE[class_type] = NODE_DISK[class_type]
+            return NODE_CACHE[class_type]
         d = api(f"/object_info/{class_type}")
         if class_type not in d:
             raise ComfyError(f"ノード定義がありません: {class_type}")
-        cache[class_type] = d[class_type]
-    return cache[class_type]
+        NODE_CACHE[class_type] = d[class_type]
+        NODE_DISK[class_type] = d[class_type]
+        NODE_DIRTY = True
+    return NODE_CACHE[class_type]
 
 
 def has_node(class_type):
@@ -282,7 +323,8 @@ def apply_model_overrides(prompt, notes):
                     break
         if not hits:
             raise ComfyError(f"--{role} の差し替え先が見つかりませんでした（探索キー: {'/'.join(pats)}）"
-                             f"\n  その環境では別ノードの可能性があるので、自環境のワークフローを --workflow で渡してください")
+                             f"\n  その環境では別ノードの可能性があるので、自環境のワークフローを --workflow で渡してください"
+                             f"\n  実在するファイル名は --print-env（または env.json の models.{role}.candidates）に出ます")
         notes.extend(hits)
     return notes
 
@@ -432,11 +474,345 @@ def has_flag(argv, flag):
     return any(tok == flag or tok.startswith(flag + "=") for tok in argv)
 
 
-def setting(argv, cli, env, default, *, path=False, numeric=False):
-    """CLI 引数 > 環境変数 > 既定値 の順で 1 つの設定を取り出す。"""
+def state_dir():
+    """このスキルの状態置き場。配布物（スキルフォルダ）には書かない。"""
+    override = os.environ.get("COMFY_STATE_DIR")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    xdg = os.environ.get("XDG_STATE_HOME")
+    root = xdg if xdg else os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(root, SKILL_ID)
+
+
+def env_file_path(argv):
+    p = flag_value(argv, "--env-file") or os.environ.get("COMFY_ENV_FILE")
+    return os.path.abspath(os.path.expanduser(p)) if p else os.path.join(state_dir(), ENV_NAME)
+
+
+def nodes_file_path():
+    return os.path.join(os.path.dirname(ENV_PATH or env_file_path([])), NODES_NAME)
+
+
+def write_json(path, payload):
+    """途中まで書いたファイルが残らないよう、リネームで差し替える。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+    for p, mode in ((os.path.dirname(path), 0o700), (path, 0o600)):
+        try:
+            os.chmod(p, mode)
+        except OSError:
+            pass
+
+
+def read_env_file(argv):
+    """env.json を読む。戻り値は (path, dict | None, 理由)。"""
+    path = env_file_path(argv)
+    if has_flag(argv, "--no-env"):
+        return path, None, "--no-env で無効化"
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return path, None, "env.json がまだ無い"
+    except (OSError, ValueError) as e:
+        return path, None, f"env.json が読めない（{type(e).__name__}: {e}）"
+    if not isinstance(data, dict) or data.get("schema") != ENV_SCHEMA:
+        got = data.get("schema") if isinstance(data, dict) else type(data).__name__
+        return path, None, f"env.json の schema が合わない（{got} != {ENV_SCHEMA}）"
+    return path, data, ""
+
+
+def env_ttl(env):
+    """保存された TTL。0 は「毎回検出」なので、falsy で既定値に落としてはいけない。"""
+    try:
+        return int(env.get("ttl_seconds", TTL_DEFAULT))
+    except (TypeError, ValueError):
+        return int(TTL_DEFAULT)
+
+
+def graph_sha(wf_path):
+    """同梱グラフの内容ハッシュ（スキル更新でモデル patch 名が変わったら検出し直させる）。"""
+    try:
+        with open(wf_path, "rb") as f:
+            return sha_of(f.read().decode("utf-8", "replace"))
+    except OSError:
+        return ""
+
+
+def detect_reason(argv, env, wf_path=None):
+    """検出し直す理由（しないなら None）。未作成・TTL 切れ・グラフ変更なら自動で再検出する。"""
+    if has_flag(argv, "--no-env"):
+        return None
+    if has_flag(argv, "--setup"):
+        return "--setup"
+    if has_flag(argv, "--refresh-env"):
+        return "--refresh-env"
+    if has_flag(argv, "--print-env"):
+        return None      # 設定を見るだけのコマンドで、検出（= engine の unload）は走らせない
+    if has_flag(argv, "--follow"):
+        return None      # 追従だけの実行で、検出の再走（= engine への unload）はしない
+    if has_flag(argv, "--no-auto-setup"):
+        return None
+    if env is None:
+        return "env.json が無い/読めない"
+    if wf_path and graph_sha(wf_path) != (env.get("fingerprint") or {}).get("workflow_sha256"):
+        return "同梱グラフが変わった"
+    if time.time() - float(env.get("generated_at") or 0) > env_ttl(env):
+        return f"TTL {env_ttl(env)}s 切れ"
+    return None
+
+
+def sha_of(obj):
+    if obj is None:
+        return ""
+    return hashlib.sha256(json.dumps(obj, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def load_nodes_cache():
+    """nodes.json（object_info の写し）を復元する。fingerprint が変わった後は使わない。"""
+    global NODE_DISK
+    if not ENV or has_flag(sys.argv[1:], "--no-env"):
+        return
+    try:
+        with open(nodes_file_path(), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    if data.get("fingerprint") != sha_of(ENV.get("fingerprint")):
+        return
+    if isinstance(data.get("nodes"), dict):
+        NODE_DISK = data["nodes"]
+
+
+def save_nodes_cache():
+    global NODE_DIRTY
+    if not ENV or not NODE_DIRTY or has_flag(sys.argv[1:], "--no-env"):
+        return
+    write_json(nodes_file_path(), {"schema": ENV_SCHEMA, "generated_at": int(time.time()),
+                                   "fingerprint": sha_of(ENV.get("fingerprint")), "nodes": NODE_DISK})
+    NODE_DIRTY = False
+
+
+def role_of(class_type):
+    """class_type が unet / clip / vae のどれを読み込むノードか（None なら_loader ではない）。"""
+    key = class_type.lower().replace("_", "")
+    for role, pats in LOADER_MATCHES.items():
+        if any(pat in key for pat in pats):
+            return role
+    return None
+
+
+def file_choices(spec):
+    """object_info から、そのノードが受け取るファイル名の選択肢を順に並べる。"""
+    out = []
+    for decl in {**spec["input"].get("required", {}), **spec["input"].get("optional", {})}.values():
+        if isinstance(decl, list) and decl and isinstance(decl[0], list):
+            for opt in decl[0]:
+                if isinstance(opt, str) and opt not in out:
+                    out.append(opt)
+    return out
+
+
+def graph_classes(wf_path):
+    """同梱グラフが実際に使う class_type（patch 後の名前も含む）を保証付き順で取る。"""
+    with open(wf_path, encoding="utf-8") as f:
+        graph = json.load(f)
+    out, seen = [], set()
+    for n in graph["nodes"]:
+        if n["type"] in SKIP_TYPES or n["id"] in DROP_IDS:
+            continue
+        for ctype in (n["type"], PATCHES.get(n["id"], (None, None))[0]):
+            if ctype and ctype not in seen:
+                seen.add(ctype)
+                out.append(ctype)
+    return out
+
+
+def graph_patch_models(wf_path):
+    """同梱グラフが前提にしているモデルファイル名を role ごとに拾う（作者環境の値）。"""
+    with open(wf_path, encoding="utf-8") as f:
+        graph = json.load(f)
+    types = {n["id"]: n["type"] for n in graph["nodes"]}
+    out = {}
+    for nid, (ctype, widgets) in PATCHES.items():
+        if not widgets or not isinstance(widgets[0], str):
+            continue
+        role = role_of(ctype or types.get(nid, ""))
+        if role:
+            out[role] = (ctype or types.get(nid), widgets[0])
+    return out
+
+
+def closest_name(wanted, options):
+    """この環境に無いモデル名の代わりに使えそうな名前（無ければ None）。"""
+    if not wanted or not options:
+        return None
+    hits = difflib.get_close_matches(wanted, options, n=1, cutoff=0.6)
+    if hits:
+        return hits[0]
+    if len(options) == 1:
+        return options[0]
+    return None
+
+
+def detect_models(wf_path, env):
+    """同梱グラフのモデル名がこの ComfyUI に実在するか確かめ、実在する名前を控える。"""
+    wanted = graph_patch_models(wf_path)
+    classes = env["classes"]
+    out = {}
+    for role in LOADER_MATCHES:
+        cls, name = wanted.get(role, (None, None))
+        entry = {"loader_class": cls, "name": name, "verified": name is None, "candidates": []}
+        for ctype in classes:
+            if role_of(ctype) != role:
+                continue
+            try:
+                opts = file_choices(node_spec(ctype))
+            except ComfyError as e:
+                env["warnings"].append(f"{role}: {ctype} の選択肢が取れない（{str(e).splitlines()[0]}）")
+                continue
+            if not opts:
+                continue
+            entry["loader_class"] = ctype
+            if not entry["candidates"]:
+                entry["candidates"] = opts
+            if name and name in opts:
+                entry["name"] = name
+                entry["verified"] = True
+        if not entry["verified"] and entry["candidates"]:
+            guess = closest_name(name, entry["candidates"])
+            if guess:
+                entry["name"] = guess
+                entry["guessed"] = True
+                env["warnings"].append(
+                    f"{role}: {name!r} はこの ComfyUI に無い → {guess!r} を使う"
+                    f"（違えば --{role} で上書き。候補は candidates を見る）")
+            else:
+                env["warnings"].append(
+                    f"{role}: {name!r} に見合うファイルが無い。candidates から選んで --{role} を渡す")
+        out[role] = entry
+    return out
+
+
+def detect_engines(argv):
+    """GPU を譲る相手がこの機械にいるかを 1 回だけ確かめる。応答を見に行くため unload は走る。"""
+    if has_flag(argv, "--no-unload-engine"):
+        return []
+    urls = flag_list(argv, "--unload-engine")
+    if not urls:
+        env_urls = os.environ.get("UNLOAD_ENGINE_URL") or os.environ.get("STRATA_URL")
+        urls = [u.strip() for u in env_urls.split(",") if u.strip()] if env_urls else [ENGINE_DEFAULT]
+    key = os.environ.get("UNLOAD_ENGINE_API_KEY") or os.environ.get("STRATA_API_KEY") or ""
+    headers = {"Authorization": f"Bearer {key}"} if key else None
+    out = []
+    for url in urls:
+        url = url.rstrip("/")
+        rec = {"url": url, "unload_api": False, "state": ""}
+        try:
+            res = api("/v1/unload", {}, base=url, headers=headers)
+            status = res.get("status") if isinstance(res, dict) else None
+            rec["unload_api"] = status in ("unloaded", "not loaded")
+            rec["state"] = str(status if status else "status が返らない")
+        except ComfyError as e:
+            reason = getattr(e.__cause__, "reason", None)
+            first = str(e).splitlines()[0]
+            if getattr(reason, "errno", None) == errno.ECONNREFUSED:
+                rec["state"] = "起動していない"
+            elif first.startswith("HTTP 404") or first.startswith("HTTP 405"):
+                rec["state"] = "unload API を持たないサービス"
+            else:
+                rec["state"] = first
+        out.append(rec)
+    return out
+
+
+def detect(argv, base, wf_path, prev=None):
+    """この機械の ComfyUI を 1 回だけ調べて、env dict にまとめる（env.json に書く）。
+
+    prev は以前の env.json。引数で明示していない値（出力先・keep_models）は引き継ぐ。
+    """
+    prev = prev or {}
+    global BASE
+    BASE = base
+    keep = has_flag(argv, "--keep-models") or (
+        not has_flag(argv, "--no-keep-models") and bool(prev.get("keep_models")))
+    env = {"schema": ENV_SCHEMA,
+           "generated_at": int(time.time()),
+           "generated_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+           "ttl_seconds": setting(argv, "env-ttl", "COMFY_ENV_TTL", TTL_DEFAULT, numeric=True),
+           "comfy_url": base,
+           "output_dir": setting(argv, "output-dir", "COMFY_OUTPUT_DIR",
+                                prev.get("output_dir") or OUTPUT_DEFAULT, path=True),
+           "keep_models": keep,
+           "warnings": [],
+           "comfy": {}, "devices": [], "classes": [], "models": {}, "engines": [],
+           "fingerprint": {}}
+    stats = api("/system_stats")
+    sysinfo = stats.get("system") or {}
+    env["comfy"] = {k: sysinfo.get(k) for k in
+                    ("comfyui_version", "os", "python_version", "ram_total", "ram_free") if sysinfo.get(k) is not None}
+    devices = stats.get("devices") or []
+    env["devices"] = [{k: d.get(k) for k in ("name", "type", "index") if d.get(k) is not None}
+                      for d in devices if isinstance(d, dict)]
+    env["classes"] = graph_classes(wf_path)
+    absent = [c for c in env["classes"] if not has_node(c)]
+    if absent:
+        env["warnings"].append(f"この ComfyUI に無いノードクラス: {', '.join(absent)}"
+                               "（graph は patch を外して組み替える必要がある）")
+    env["models"] = detect_models(wf_path, env)
+    if "engines" in prev and not (has_flag(argv, "--setup") or has_flag(argv, "--refresh-env")):
+        env["engines"] = prev["engines"]   # 自動再検出で engine を unload し直さない
+        env["warnings"].append("engines は前の検出結果を維持（--setup で確認し直せる）")
+    else:
+        env["engines"] = detect_engines(argv)
+    env["fingerprint"] = {
+        "comfy": {k: sysinfo.get(k) for k in ("comfyui_version", "os", "python_version")},
+        "devices": [d.get("name") for d in env["devices"]],
+        "classes": sorted(env["classes"]),
+        "workflow_sha256": graph_sha(wf_path),
+    }
+    return env
+
+
+def print_env():
+    """解決済みの設定と、env.json どの程度新しいかを表示する（送信も検出もしない）。"""
+    print("=== env ===")
+    print(f"  ファイル   : {ENV_PATH}")
+    if ENV_NOTE:
+        print(f"  状態       : {ENV_NOTE}")
+    if ENV_REASON:
+        print(f"  読み込み   : {ENV_REASON}")
+    if ENV is None:
+        print("  → env.json は使わず、引数・環境変数・既定値で動いています（--setup で検出できます）")
+        return
+    age = int(time.time() - float(ENV.get("generated_at") or 0))
+    print(f"  検出       : {ENV.get('generated_at_iso', '?')}（{age}s 前 / TTL {env_ttl(ENV)}s）")
+    print(f"  ComfyUI    : {BASE} / {ENV.get('comfy', {}).get('comfyui_version', '?')} / "
+          f"{', '.join(d.get('name', '?') for d in ENV.get('devices') or []) or 'device 情報なし'}")
+    print(f"  出力先     : {OUT_DIR}")
+    for role, entry in (ENV.get("models") or {}).items():
+        mark = "実在" if entry.get("verified") else ("推定" if entry.get("guessed") else "未検証")
+        print(f"  {role:<5} : {entry.get('name')}（{entry.get('loader_class')} / {mark}"
+              f" / 候補 {len(entry.get('candidates') or [])} 件）")
+    for rec in ENV.get("engines") or []:
+        print(f"  engine : {rec.get('url')} → {'unload API あり' if rec.get('unload_api') else rec.get('state')}")
+    print(f"  keep_models: {bool(ENV.get('keep_models'))} / nodes.json キャッシュ: {len(NODE_DISK)} クラス")
+    for w in ENV.get("warnings") or []:
+        print(f"  WARNING: {w}")
+
+
+def setting(argv, cli, env, default, *, json_key=None, path=False, numeric=False):
+    """CLI 引数 > 環境変数 > env.json > 既定値 の順で 1 つの設定を取り出す。"""
     val = flag_value(argv, "--" + cli)
     if val is None and env:
         val = os.environ.get(env) or None
+    if val is None and json_key and ENV:
+        got = ENV.get(json_key)
+        val = got if isinstance(got, str) and got else None
     if val is None:
         val = default
     if path and val:
@@ -450,33 +826,61 @@ def setting(argv, cli, env, default, *, path=False, numeric=False):
 
 
 def resolve_engines(argv):
-    """GPU を譲りたい推論エンジンの URL 群。明示的に無効化されると空になる。"""
+    """GPU を譲りたい推論エンジン。明示指定 > 環境変数 > env.json（検出済み）> 既定 URL を 1 回試す。"""
     if has_flag(argv, "--no-unload-engine"):
         return []
     urls = flag_list(argv, "--unload-engine")
     if not urls:
-        env = os.environ.get("UNLOAD_ENGINE_URL") or os.environ.get("STRATA_URL") or ENGINE_DEFAULT
-        urls = [u.strip() for u in env.split(",") if u.strip()]
+        env_urls = os.environ.get("UNLOAD_ENGINE_URL") or os.environ.get("STRATA_URL")
+        if env_urls:
+            urls = [u.strip() for u in env_urls.split(",") if u.strip()]
+    if not urls and ENV is not None:
+        if "engines" in ENV:
+            urls = [e["url"] for e in (ENV.get("engines") or []) if e.get("unload_api")]
+        else:
+            urls = [ENGINE_DEFAULT]      # 未検出なら従来どおり 1 回試して skip する
+    if not urls and ENV is None:
+        urls = [ENGINE_DEFAULT]
     key = os.environ.get("UNLOAD_ENGINE_API_KEY") or os.environ.get("STRATA_API_KEY") or ""
     headers = {"Authorization": f"Bearer {key}"} if key else None
     return [(u.rstrip("/"), headers) for u in urls]
 
 
 def configure(argv):
-    """引数・環境変数・既定値をまとめて解決し、モジュール設定に反映する。"""
+    """引数・環境変数・env.json・既定値をまとめて解決し、モジュール設定に反映する。
+
+    env.json が無い・TTL 切れなら、ここで 1 回だけこの機械を検出して書き直す。
+    """
     global BASE, WF_IN, API_OUT, OUT_DIR, WAIT_TIMEOUT, SEED, MODELS, ENGINES
-    BASE = setting(argv, "comfy-url", "COMFY_URL", COMFY_DEFAULT).rstrip("/")
+    global ENV, ENV_PATH, ENV_NOTE, ENV_REASON
+    ENV_PATH, ENV, ENV_REASON = read_env_file(argv)
     WF_IN = setting(argv, "workflow", "COMFY_WORKFLOW", WORKFLOW_DEFAULT, path=True)
-    OUT_DIR = setting(argv, "output-dir", "COMFY_OUTPUT_DIR", OUTPUT_DEFAULT, path=True)
+    reason = detect_reason(argv, ENV, WF_IN)
+    if reason:
+        base = setting(argv, "comfy-url", "COMFY_URL", (ENV or {}).get("comfy_url") or COMFY_DEFAULT).rstrip("/")
+        ENV = detect(argv, base, WF_IN, ENV)
+        write_json(ENV_PATH, ENV)
+        ENV_NOTE = f"{reason} のため検出して更新" + (f"（読み込み: {ENV_REASON}）" if ENV_REASON else "")
+        ENV_REASON = ""
+        save_nodes_cache()
+    BASE = setting(argv, "comfy-url", "COMFY_URL", COMFY_DEFAULT, json_key="comfy_url").rstrip("/")
+    OUT_DIR = setting(argv, "output-dir", "COMFY_OUTPUT_DIR", OUTPUT_DEFAULT, json_key="output_dir", path=True)
     WAIT_TIMEOUT = setting(argv, "timeout", "WAIT_TIMEOUT", WAIT_DEFAULT, numeric=True)
     SEED = setting(argv, "seed", "SEED", SEED_DEFAULT, numeric=True)
-    MODELS = {role: setting(argv, role, f"MOSS_{role.upper()}", None) for role in LOADER_MATCHES}
+    MODELS = {}
+    for role in LOADER_MATCHES:
+        entry = (ENV.get("models") or {}).get(role) or {} if ENV else {}
+        MODELS[role] = setting(argv, role, f"MOSS_{role.upper()}", entry.get("name"))
     ENGINES = resolve_engines(argv)
+    load_nodes_cache()
+    keep_models = has_flag(argv, "--keep-models") or (
+        not has_flag(argv, "--no-keep-models") and bool((ENV or {}).get("keep_models")))
     debug_path = flag_value(argv, "--debug")
     API_OUT = os.path.abspath(os.path.expanduser(debug_path)) if debug_path \
         else os.path.join(os.getcwd(), DEBUG_NAME)
     return {"dry": has_flag(argv, "--dry-run"), "debug": has_flag(argv, "--debug"),
-            "keep_models": has_flag(argv, "--keep-models")}
+            "setup": has_flag(argv, "--setup"), "print_env": has_flag(argv, "--print-env"),
+            "keep_models": keep_models}
 
 
 LATENT_TYPES = {"EmptyLatentImage", "EmptySD3LatentImage", "EmptyFlux2LatentImage",
@@ -560,15 +964,35 @@ def fail(msg, code=1):
     sys.exit(code)
 
 
-def main():
-    argv = sys.argv[1:]
+def error_hint(msg):
+    """接続できない・モデル名が無い、のときは検出コマンドを添える（毎回調べに戻らなくて済むように）。"""
+    if msg.startswith("接続不能"):
+        return ("\n  ヒント: ComfyUI が起動していないか URL が違います。"
+                "--setup --comfy-url http://127.0.0.1:8188 で検出し直すと env.json に保存されます")
+    if "差し替え先が見つかりませんでした" in msg or "ノード定義がありません" in msg:
+        return "\n  ヒント: --setup で環境を検出し直し、env.json の models[*].candidates から選んでください"
+    return ""
+
+
+def run(argv):
     cfg = configure(argv)
     keep_models = cfg["keep_models"]
+    if cfg["print_env"]:
+        print_env()
+        return
+    if cfg["setup"]:
+        print(f"\n=== --setup 完了: {ENV_PATH} ===")
+        print_env()
+        return
     if keep_models:
         print("WARNING: --keep-models は ComfyUI の VRAM を保持するため、同じ GPU を使う推論エンジンが再ロードできない場合があります。")
+    env_src = ENV_NOTE or ENV_REASON or "読み込み済み"
+    models_line = " / ".join(f"{r}={MODELS[r] or 'graph 内蔵'}" for r in LOADER_MATCHES)
     print(f"=== 設定 ===\n  ComfyUI : {BASE}\n  ワークフロー: {WF_IN}\n  出力先  : {OUT_DIR}"
           f"\n  seed      : {SEED} / 待ち上限 {WAIT_TIMEOUT}s"
-          f"\n  推論エンジン: {', '.join(u for u, _ in ENGINES) or 'なし（解放しません）'}")
+          f"\n  models    : {models_line}"
+          f"\n  推論エンジン: {', '.join(u for u, _ in ENGINES) or 'なし（解放しません）'}"
+          f"\n  env.json  : {ENV_PATH}（{env_src}）")
     pid = flag_value(argv, "--follow")
     if has_flag(argv, "--follow") and not pid:
         raise ComfyError("--follow には prompt_id を付けてください（--follow <PROMPT_ID>）")
@@ -633,11 +1057,20 @@ def main():
             free_gpu()
 
 
+def main():
+    argv = sys.argv[1:]
+    try:
+        run(argv)
+    finally:
+        # 今回取った object_info を次回以降の起動で再利用する（HTTP を減らす）
+        save_nodes_cache()
+
+
 if __name__ == "__main__":
     try:
         main()
     except (ComfyError, TimeoutError) as e:
-        fail(str(e))
+        fail(str(e) + error_hint(str(e)))
     except FileNotFoundError as e:
         fail(f"ファイルがありません: {e.filename}"
              "（--workflow / --prompt-file / --negative-file のパスを確認してください）")
