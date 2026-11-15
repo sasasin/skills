@@ -16,6 +16,7 @@ ComfyUI のワークフロー 1 本（UI form の JSON）と、それを API for
 スクリプトはこのスキルフォルダ内の `comfy_run.py`。インストール先はスキルをロードしたときに示されるパスなので、それをたどって絶対パスで実行する。ワークフローはスクリプトと同じ場所から見つける。
 
 ```sh
+python3 "<スキルフォルダ>/comfy_run.py" --help       # オプション一覧（生成しない）
 python3 "<スキルフォルダ>/comfy_run.py" --setup     # 初回だけ（以降は実行しない）
 python3 "<スキルフォルダ>/comfy_run.py" --dry-run
 python3 "<スキルフォルダ>/comfy_run.py" --prompt-file /path/to/prompt.txt --size 832x1248 --prefix Image

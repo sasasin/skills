@@ -11,7 +11,9 @@ env.json は「その機械で 1 回だけ調べた結果」を書き置くフ�
 env.json が無い・TTL 切れ、のどちらかなら実行時に自動で検出して書き、以降はファイルを読むだけになる。
 
 使い方:
-    python3 comfy_run.py                 # 変換して送信し、完了を待って画像を取り出す
+    python3 comfy_run.py --help           # オプション一覧を表示する（生成しない）
+    python3 comfy_run.py                 # 引数が無い場合は help を表示（生成しない）
+    python3 comfy_run.py --seed 20261114  # 変換して送信し、完了を待って画像を取り出す
     python3 comfy_run.py --setup         # 環境を調べて env.json に保存するだけ（生成はしない）
     python3 comfy_run.py --print-env     # 解決済みの設定と env.json の鮮度を表示するだけ（送信しない）
     python3 comfy_run.py --dry-run       # 変換結果を表示するだけ（送信しない）
@@ -55,6 +57,7 @@ env.json が無い・TTL 切れ、のどちらかなら実行時に自動で検�
     python3 comfy_run.py --steps 30 --cfg 2.5 --sampler euler --scheduler simple
     python3 comfy_run.py --prefix IMG               # SaveImage の filename_prefix
 """
+import argparse
 import difflib
 import errno
 import hashlib
@@ -103,6 +106,7 @@ ENV_REASON = ""
 NODE_CACHE = {}     # class_type -> object_info（このプロセス内）
 NODE_DISK = {}      # nodes.json から読んだ分（fingerprint が一致したときだけ使う）
 NODE_DIRTY = False
+ARGS = None          # argparse で解析した CLI オプション
 
 # ComfyUI の UI widget でしか使われない sentinel 値。object_info の選択肢に
 # 存在せず、widgets_values の個数だけがノード数より多い場合に捨てる。
@@ -304,7 +308,6 @@ def apply_model_overrides(prompt, notes):
 
     同梱グラフのモデル名は作者の環境向けなので、他の環境ではこれを渡す。
     """
-    argv = sys.argv[1:]
     for role in LOADER_MATCHES:
         name = MODELS.get(role)
         if not name:
@@ -444,34 +447,21 @@ def download(item, dest_dir):
     return path, len(raw)
 
 
-def flag_value(argv, flag):
-    """--flag value / --flag=value の値。次のトークンが別のフラグなら値なし（None）。"""
-    for i, tok in enumerate(argv):
-        if tok.startswith(flag + "="):
-            return tok.split("=", 1)[1]
-        if tok == flag:
-            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
-                return argv[i + 1]
-            return None
-    return None
+def flag_value(args, flag):
+    """argparse Namespace からオプション値を取得する。"""
+    return getattr(args, flag.lstrip("-").replace("-", "_"), None)
 
 
-def flag_list(argv, flag):
-    """同じフラグを複数回指定された値を順に返す。"""
-    vals, i = [], 0
-    while i < len(argv):
-        tok = argv[i]
-        if tok.startswith(flag + "="):
-            vals.append(tok.split("=", 1)[1])
-        elif tok == flag and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
-            vals.append(argv[i + 1])
-            i += 1
-        i += 1
-    return vals
+def flag_list(args, flag):
+    """繰り返し指定できるオプションの値を順に返す。"""
+    return getattr(args, flag.lstrip("-").replace("-", "_"), None) or []
 
 
-def has_flag(argv, flag):
-    return any(tok == flag or tok.startswith(flag + "=") for tok in argv)
+def has_flag(args, flag):
+    """argparse Namespace のフラグが有効か調べる。"""
+    if flag == "--debug":
+        return flag_value(args, flag) is not None
+    return bool(flag_value(args, flag))
 
 
 def state_dir():
@@ -490,7 +480,7 @@ def env_file_path(argv):
 
 
 def nodes_file_path():
-    return os.path.join(os.path.dirname(ENV_PATH or env_file_path([])), NODES_NAME)
+    return os.path.join(os.path.dirname(ENV_PATH or env_file_path(ARGS)), NODES_NAME)
 
 
 def write_json(path, payload):
@@ -575,7 +565,7 @@ def sha_of(obj):
 def load_nodes_cache():
     """nodes.json（object_info の写し）を復元する。fingerprint が変わった後は使わない。"""
     global NODE_DISK
-    if not ENV or has_flag(sys.argv[1:], "--no-env"):
+    if not ENV or has_flag(ARGS, "--no-env"):
         return
     try:
         with open(nodes_file_path(), encoding="utf-8") as f:
@@ -590,7 +580,7 @@ def load_nodes_cache():
 
 def save_nodes_cache():
     global NODE_DIRTY
-    if not ENV or not NODE_DIRTY or has_flag(sys.argv[1:], "--no-env"):
+    if not ENV or not NODE_DIRTY or has_flag(ARGS, "--no-env"):
         return
     write_json(nodes_file_path(), {"schema": ENV_SCHEMA, "generated_at": int(time.time()),
                                    "fingerprint": sha_of(ENV.get("fingerprint")), "nodes": NODE_DISK})
@@ -888,9 +878,8 @@ LATENT_TYPES = {"EmptyLatentImage", "EmptySD3LatentImage", "EmptyFlux2LatentImag
 KSAMPLER_TYPES = {"KSampler", "KSamplerAdvanced", "KSamplerAdvancedGuider"}
 
 
-def apply_overrides(prompt, notes):
+def apply_overrides(prompt, notes, argv):
     """基準ワークフローに手を付けず、CLI で渡したものだけを適用する。"""
-    argv = sys.argv[1:]
     pf = flag_value(argv, "--prompt-file")
     if pf:
         text = open(os.path.expanduser(pf), encoding="utf-8").read().strip()
@@ -942,8 +931,8 @@ def apply_overrides(prompt, notes):
     for nid, p in prompt.items():
         if p["class_type"] in KSAMPLER_TYPES:
             for key, val in (("sampler_name", sampler), ("scheduler", scheduler),
-                             ("steps", int(steps) if steps else None),
-                             ("cfg", float(cfg) if cfg else None)):
+                             ("steps", int(steps) if steps is not None else None),
+                             ("cfg", float(cfg) if cfg is not None else None)):
                 if val is not None and key in p["inputs"]:
                     p["inputs"][key] = val
                     notes.append(f"[{nid}] {key} = {val}")
@@ -1010,7 +999,7 @@ def run(argv):
     dry, debug = cfg["dry"], cfg["debug"]
     graph = json.load(open(WF_IN))
     prompt, notes = convert(graph)
-    notes = apply_overrides(prompt, notes)
+    notes = apply_overrides(prompt, notes, argv)
     notes = apply_model_overrides(prompt, notes)
     notes.extend(apply_seed(prompt, SEED))
 
@@ -1057,10 +1046,57 @@ def run(argv):
             free_gpu()
 
 
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="ComfyUI のワークフローを変換して実行し、生成画像を保存します。",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--setup", action="store_true", help="環境を検出して env.json に保存（生成しない）")
+    parser.add_argument("--print-env", action="store_true", help="解決済み設定と env.json の状態を表示（送信しない）")
+    parser.add_argument("--dry-run", action="store_true", help="変換結果を表示（送信しない）")
+    parser.add_argument("--follow", metavar="PID", help="送信済みジョブを追従")
+    parser.add_argument("--debug", nargs="?", const="", metavar="PATH", help="変換後 JSON を保存（PATH 省略時は cwd に保存）")
+    parser.add_argument("--keep-models", action="store_true", help="生成後に ComfyUI のモデルを降ろさない")
+    parser.add_argument("--no-keep-models", action="store_true", help="生成後に ComfyUI のモデルを降ろす")
+
+    parser.add_argument("--refresh-env", action="store_true", help="実行前に環境を強制再検出")
+    parser.add_argument("--no-auto-setup", action="store_true", help="env.json が失効しても自動検出しない")
+    parser.add_argument("--no-env", action="store_true", help="env.json と nodes.json を使わない")
+    parser.add_argument("--env-file", metavar="PATH", help="env.json の場所")
+    parser.add_argument("--env-ttl", metavar="N", help="再検出までの秒数（COMFY_ENV_TTL も可）")
+
+    parser.add_argument("--comfy-url", metavar="URL", help="ComfyUI API base")
+    parser.add_argument("--workflow", metavar="PATH", help="基準にする UI form ワークフロー")
+    parser.add_argument("--output-dir", metavar="PATH", help="生成画像の保存先")
+    parser.add_argument("--unet", metavar="NAME", help="UNET/拡散モデルのファイル名")
+    parser.add_argument("--clip", metavar="NAME", help="CLIP のファイル名")
+    parser.add_argument("--vae", metavar="NAME", help="VAE のファイル名")
+    parser.add_argument("--seed", metavar="N", help="再現用 seed")
+    parser.add_argument("--timeout", metavar="N", help="完了待ちの上限秒数")
+    parser.add_argument("--unload-engine", action="append", metavar="URL", help="GPU を譲る推論エンジン（複数指定可）")
+    parser.add_argument("--no-unload-engine", action="store_true", help="推論エンジンを unload しない")
+
+    parser.add_argument("--prompt-file", metavar="PATH", help="positive prompt のテキストファイル")
+    parser.add_argument("--negative-file", metavar="PATH", help="negative prompt のテキストファイル")
+    parser.add_argument("--size", metavar="WxH", help="解度（縦横とも 16 の倍数）")
+    parser.add_argument("--steps", type=int, metavar="N", help="サンプリング step 数")
+    parser.add_argument("--cfg", type=float, metavar="N", help="CFG scale")
+    parser.add_argument("--sampler", metavar="NAME", help="sampler 名")
+    parser.add_argument("--scheduler", metavar="NAME", help="scheduler 名")
+    parser.add_argument("--prefix", metavar="NAME", help="保存ファイル名の prefix")
+    return parser
+
+
 def main():
-    argv = sys.argv[1:]
+    global ARGS
+    parser = build_parser()
+    raw_args = sys.argv[1:]
+    ARGS = parser.parse_args(raw_args)
+    if not raw_args:
+        parser.print_help()
+        return
     try:
-        run(argv)
+        run(ARGS)
     finally:
         # 今回取った object_info を次回以降の起動で再利用する（HTTP を減らす）
         save_nodes_cache()
